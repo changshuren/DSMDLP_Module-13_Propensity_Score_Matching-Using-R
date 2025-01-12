@@ -1,0 +1,234 @@
+---
+title: "Propensity Score Analysis"
+output:
+  html_document:
+    df_print: paged
+editor_options:
+  chunk_output_type: inline
+---
+*code for Chapter 5 "Propensity Score Matching" of book:*
+*Leite, W. L. (2017). Practical propensity score methods using R. *
+*Thousand Oaks, CA: Sage. *
+
+
+As the R software and the R packages used in this example are updated frequently some incompatibilities between the current code and new R versions or package versions may appear.
+Any updates to the code will be posted at:
+http://www.practicalpropensityscore.com
+
+
+This example estimates the effect of mothers having a job that provides or subsidizes child care on the length that they breastfeed their children National Longitudinal Survey of Youth 1979 (NLSY79)  and the NLSY79 Children and Youth
+
+
+# STEP 1 - DATA PREPARATION
+
+
+*load dataset*
+```{r, echo=FALSE}
+load(file="U:/U-Shu-Ren/Mine/Data_Certificate/DSMDLP Training Fall 2024/Module_13/Chapter5_data_breastfeeding_example.rData")
+
+```
+
+
+
+*Select covariates*
+```{r, echo=F}
+covariateNames <- c(
+    "C0005300", #RACE OF CHILD (MOTHER'S RACIAL/ETHNIC COHORT FROM SCREENER)                        
+    "C0005400", #SEX OF CHILD                                                         
+     "C0270300", #NUMBER OF JOBS HELD BY MOTHER IN 4TH QTR BEFORE BIRTH OF CHILD                           
+    "C0270600", #USUAL HOURS WORKED BY MOTHER AT ALL JOBS IN 4TH QTR BEFORE BIRTH OF CHILD         
+    "C0270700", #USUAL EARNINGS OF MOTHER AT ALL JOBS IN 4TH QTR BEFORE BIRTH OF CHILD             
+    "C0271800", # COLLECTIVE BARGAINING SET MOTHER'S MAIN JOB WAGES, 4TH QTR BEFORE BIRTH OF CHILD 
+    "C0328000", #LENGTH OF GESTATION OF CHILD IN WEEKS                                                    
+    "C0328400", #CHILD DELIVERED BY CESAREAN SECTION?                                                  
+    "C0329000", # DAYS MOTHER STAYED IN HOSPITAL AT BIRTH OF CHILD                                    
+    "C0329100", # DAYS CHILD STAYED IN HOSPITAL AFTER DELIVERY                                        
+    "R0000700",    #COUNTRY OF BIRTH  OF MOTHER
+    "R0618300",    #PROFILES ARMED FORCES QUALIFICATION TEST (AFQT) PERCENTILE SCORE - REVISED 1989 AFQT-2 
+    "C0270200", #weeks after birth that mother returned to work (restricted to 12 weeks or less)
+    "motherAge", #age of mother at child's birth
+    "classWorker", #CLASS OF WORKER AT CURRENT JOB/MOST RECENT JOB
+"familySize" , #FAMILY SIZE
+"highestGrade" , #HIGHEST GRADE COMPLETED AS OF MAY 1 SURVEY YEAR (REVISED)
+"jobsEver" , #NUMBER OF DIFFERENT JOBS EVER REPORTED AS OF INTERVIEW DATE
+"maritalStatus" , #MARITAL STATUS (COLLAPSED)
+"residenceRegion", #REGION OF CURRENT RESIDENCE
+"ruralUrban"  , #IS R'S CURRENT RESIDENCE URBAN/RURAL?
+"totalWelfare",  # TOTAL AMOUNT AFDC FOOD STAMPS OR OTH WELFARE/SSI RECEIVED DURING CAL YR 
+"weeksWorked", #NUMBER OF WEEKS WORKED IN PAST CALENDAR YEAR
+"hoursPerWeek", #hours per week worked in the last calendar year
+"maternityLeave", #FRINGE BENEFITS CURRENT JOB/MOST RECENT JOB - MATERNITY/PATERNITY LEAVE 
+"flexibleSchedule", #job allows flexible schedule
+"argueChores",#FREQUENCY R & HUSBAND/PARTNER ARGUE ABOUT-CHORES & RESPONSIBILITIES
+"dentalInsurance", #company provides dental insurance
+"lifeInsurance", #company provides life insurance
+"profitSharing", #company provides profit sharing
+"retirement", #company provided retirement plan
+"training") #company provided training opportunities
+```
+
+
+*Handle missing data*
+This dataset was previously imputed
+There are dummy variables indicating which values were imputed
+The names of these dummy variables end with NA
+It is important to include them in the propensity score model to account for potential imbalance in proportion of missing data between tereated and control groups
+
+*Select dummy missing value indicators for variables with at least 5% of missing data
+```{r}
+covariateNamesNA <- paste(covariateNames,"NA",sep="")
+covariateNamesNA <- covariateNamesNA[apply(data[,covariateNamesNA],2,mean)>=0.05]
+
+```
+
+
+*Combine covariate names with names of dummy missing indicator variables*
+```{r}
+covariateNames <- c(covariateNames, covariateNamesNA)
+```
+
+
+# STEP 2 - ESTIMATE PROPENSITY SCORES
+
+*obtain the propensity score formula*
+```{r}
+psFormula <- paste(covariateNames, collapse="+")
+psFormula <- formula(paste("childCare~",psFormula, sep=""))
+print(psFormula)
+```
+
+
+*estimate propensity scores with logistic regression*
+```{r, echo=F}
+psModel <- glm(psFormula, data, family=binomial())
+
+```
+
+*save propensity scores and logit of propensity scores to dataset*
+```{r, echo=F}
+data$PScores <- fitted(psModel)
+data$logitPScores <- with(data, log(PScores/(1-PScores)))
+```
+
+
+*estimate propensity scores with random forests*
+```{r, echo=F, warning=F}
+library(ranger)
+ps_ranger = ranger(psFormula, data, probability=T,  num.trees = 1000,
+                   mtry = 7)
+```
+
+
+*save logit of propensity score to dataset*
+```{r}
+prediction_ranger = predict(ps_ranger, data=data)
+data$PScores_RF = prediction_ranger$predictions[,1]
+data$logitPScores_RF = with(data, log(PScores_RF/(1-PScores_RF)))
+```
+
+
+*evaluate common support of propensity score from logistic regression with histogram*
+```{r}
+hist(data$PScores[data$childCare==0], density = 10, angle = 45, main="Propensity Scores",
+     xlab="Shaded = Untreated | Gray = Treated") 
+hist(data$PScores[data$childCare==1], col=gray(0.4,0.25), add=T) 
+
+```
+
+
+*evaluate common support of propensity score with box-and-wisker plots*
+Random forests resulted in propensity scores with poor common support
+```{r}
+library(lattice)
+bwplot( PScores~childCare, data = data, 
+        ylab = "Propensity Scores with logistic regression", auto.key = TRUE)
+bwplot( PScores_RF~childCare, data = data, 
+        ylab = "Propensity Scores with random forest", auto.key = TRUE)
+```
+
+*obtain descriptive statistics of propensity scores*
+```{r}
+by(data$PScores, INDICES=data$childCare, summary)
+```
+
+---
+
+# STEP 3 - PROPENSITY SCORE IMPLEMENTATION
+
+*Propensity score matching*
+*Variable ratio genetic matching*
+Variable ratio is obtained by performing matching with replacement
+```{r, echo=F, warning=F}
+library(MatchIt)
+Matching <- matchit(psFormula,distance=data$logitPScores, 
+                     data = data, 
+                     method = "genetic",ratio=1,replace=T,caliper=0.25)
+summary(Matching)
+```
+
+
+# STEP 4 - COVARIATE BALANCE EVALUATION
+
+```{r}
+library(cobalt)
+covariate.balance = bal.tab(Matching)
+print(covariate.balance)
+```
+
+*Using the criterion of d < 0.05 for adequate covariate balance, check if any variable did not meet the criterion
+```{r}
+
+rownames(covariate.balance[[1]])[(abs(covariate.balance[[1]][,3]) > 0.05)]
+
+```
+
+*Using the criterion of d < 0.25 for adequate covariate balance, check if any variable did not meet the criterion
+```{r}
+
+rownames(covariate.balance[[1]])[(abs(covariate.balance[[1]][,3]) > 0.25)]
+length(rownames(covariate.balance[[1]])[(abs(covariate.balance[[1]][,3]) > 0.25)])
+```
+
+
+# STEP 5 - TREATMENT EFFECT ESTIMATION
+
+*Obtain matched data*
+```{r}
+matchedData <- match.data(Matching)
+
+```
+
+*Because variable ratio matching results in weights, the survey package will be used for treatment effect estimation*
+the survey package can be used for propensity score weighting, marginal mean weighting through stratification, and propensity score matching
+
+*set up the survey design to declare what variable contains weights*
+If the data had clusters, they would also be declared in this step with the ids argument
+```{r, echo=F, warning=F}
+library(survey)
+design.Matching <- svydesign(ids=~1, weights=~weights,
+                                   data=matchedData)
+```
+
+*Fit a linear regression model using the weights to estimate the average treatment effect on treated (ATT)*
+This model has the treatment indicator as the single predictor
+the treatment effect is not statistically significant
+```{r}
+model.Matching <- svyglm(C0338600~childCare, design.Matching, family=gaussian())
+summary(model.Matching)
+```
+
+*Fit a linear regression model to estimate the ATT controlling for variables with balance above 0.05*
+the treatment effect is not statistically significant
+```{r}
+model.Matching2 <- svyglm(C0338600~childCare+C0270600+C0270700+C0328000+motherAge+familySize+highestGrade+totalWelfare+weeksWorked, design.Matching, family=gaussian())
+summary(model.Matching2)
+```
+
+# STEP 6 - SENSITIVITY ANALYSIS
+*run Frank et al. (2013) method*
+```{r}
+library(konfound)
+sensitivity = pkonfound(est_eff=coef(model.Matching2)[2],std_err = SE(model.Matching2)[2], n_obs=nrow(matchedData), n_covariates=8)
+```
+
+
